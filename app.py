@@ -4,18 +4,20 @@ from firebase_admin import credentials, firestore
 import os
 import json
 import re
-from datetime import datetime
 
 app = Flask(__name__)
 
-# Firebase 初始化
+# 初始化 Firebase
 if not firebase_admin._apps:
     firebase_config = os.environ.get('FIREBASE_KEY_JSON')
-    cred = credentials.Certificate(json.loads(firebase_config)) if firebase_config else credentials.Certificate("firebase_key.json")
+    if firebase_config:
+        cred = credentials.Certificate(json.loads(firebase_config))
+    else:
+        cred = credentials.Certificate("firebase_key.json")
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# --- 既有對獎邏輯 (保留並確保運作) ---
+# --- 既有的對獎功能邏輯 (不更動) ---
 def get_prize_info(user_num, data):
     special = data.get('special_prize')
     grand = data.get('grand_prize')
@@ -23,6 +25,7 @@ def get_prize_info(user_num, data):
     
     if user_num == special: return "特別獎 (1,000萬元)"
     if user_num == grand: return "特獎 (200萬元)"
+    
     for f in first_list:
         if user_num == f: return "頭獎 (20萬元)"
         if len(user_num) >= 7 and user_num[-7:] == f[-7:]: return "二獎 (4萬元)"
@@ -38,60 +41,55 @@ def webhook():
         req = request.get_json(silent=True, force=True)
         action = req.get('queryResult', {}).get('action')
         
-        # --- 功能 1: 查看最新開獎號碼 ---
+        # --- 新功能 1: 查看最新開獎號碼 ---
         if action == 'get_latest_invoice':
             doc = db.collection('invoice_numbers').document('latest').get()
             if not doc.exists: return jsonify({"fulfillmentText": "暫無開獎資料。"})
             data = doc.to_dict()
-            msg = (f"【{data.get('period', '最新期別')}】\n"
-                   f"特別獎: {data.get('special_prize')}\n"
-                   f"特獎: {data.get('grand_prize')}\n"
-                   f"頭獎: {', '.join(data.get('first_prizes', []))}\n\n"
-                   "規則: 8碼全對中特別/特獎，末3碼以上對應二至六獎。")
+            msg = (f"【最新開獎號碼】\n特別獎: {data['special_prize']}\n特獎: {data['grand_prize']}\n"
+                   f"頭獎: {', '.join(data['first_prizes'])}\n\n規則：頭獎後三碼以上即中獎。")
             return jsonify({"fulfillmentText": msg})
 
-        # --- 功能 2: 查看對獎紀錄 (修正時間格式錯誤) ---
+        # --- 新功能 2: 查看過往對獎記錄 ---
         elif action == 'get_history':
-            # 抓取最近 10 筆紀錄，避免顯示太多
             history_ref = db.collection('user_history').order_by('timestamp', direction='DESCENDING').limit(10)
             docs = history_ref.stream()
-            
-            msg = "【最近十筆對獎紀錄】\n"
-            found = False
-            for d in docs:
-                item = d.to_dict()
-                # 簡單顯示日期 (如果有存 timestamp)
-                msg += f"號碼: {item['number']} | 結果: {item['result']}\n"
-                found = True
-            
-            return jsonify({"fulfillmentText": msg if found else "目前尚無對獎紀錄。"})
+            msg = "【您的近十筆對獎記錄】\n"
+            records = [f"號碼: {d.to_dict()['number']} -> {d.to_dict()['result']}" for d in docs]
+            msg += "\n".join(records) if records else "尚無對獎紀錄。"
+            return jsonify({"fulfillmentText": msg})
 
-        # --- 功能 3: 既有對獎邏輯 ---
+        # --- 既有的對獎功能 (處理輸入的發票數字) ---
         else:
             params = req.get('queryResult', {}).get('parameters', {})
             user_num = params.get('number')
+            
+            # 透過正規表達式確保能抓到數字
             if not user_num:
                 query_text = req.get('queryResult', {}).get('queryText', '')
                 digits = re.findall(r'\d+', str(query_text))
                 user_num = digits[-1] if digits else None
             
-            if not user_num: return jsonify({"fulfillmentText": "請輸入發票號碼。"})
+            if not user_num:
+                return jsonify({"fulfillmentText": "請輸入有效的發票號碼數字。"})
+
             user_num = str(int(float(user_num)))
             
             data = db.collection('invoice_numbers').document('latest').get().to_dict()
             result = get_prize_info(user_num, data)
+            
             reply = f"🎉 恭喜！號碼 【{user_num}】 對中 【{result}】！" if result else f"❌ 號碼 【{user_num}】 未中獎。"
             
-            # 存入紀錄 (timestamp 使用系統時間)
+            # 存入紀錄到 Firebase
             db.collection('user_history').add({
                 'number': user_num,
                 'result': result if result else "未中獎",
-                'timestamp': datetime.now() 
+                'timestamp': firestore.SERVER_TIMESTAMP
             })
             return jsonify({"fulfillmentText": reply})
 
     except Exception as e:
-        return jsonify({"fulfillmentText": f"發生錯誤: {str(e)}"})
+        return jsonify({"fulfillmentText": f"系統處理時發生錯誤: {str(e)}"})
 
 if __name__ == '__main__':
     app.run(port=5000)
