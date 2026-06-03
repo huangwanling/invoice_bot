@@ -3,10 +3,10 @@ import firebase_admin
 from firebase_admin import credentials, firestore
 import json
 import os
-import re
 
 app = Flask(__name__)
 
+# 1. 初始化 Firebase
 if not firebase_admin._apps:
     firebase_config = os.environ.get('FIREBASE_KEY_JSON')
     if firebase_config:
@@ -22,73 +22,77 @@ def webhook():
     req = request.get_json(silent=True, force=True)
     
     try:
+        # 2. 精準抓取 Dialogflow 參數，轉為字串並移除前後空白
         parameters = req.get('queryResult', {}).get('parameters', {})
         user_input = parameters.get('invoice_num') or parameters.get('number') or ""
-        # 僅保留數字
-        user_num = ''.join(re.findall(r'\d+', str(user_input)))
+        user_num = str(user_input).strip()
     except Exception as e:
         return jsonify({"fulfillmentText": "請輸入發票號碼數字（例如：520 或完整 8 碼）"})
 
-    if not user_num:
-        return jsonify({"fulfillmentText": "請輸入正確的發票號碼數字。"})
+    if not user_num.isdigit():
+        return jsonify({"fulfillmentText": "請輸入純數字的發票號碼喔！"})
 
-    # 撈取 Firebase 完整資料
+    # 3. 去 Firebase 撈取最新一期完整中獎資料
     target_period = "1150304中獎號碼單" 
     doc_ref = db.collection('invoice_numbers').document(target_period)
     doc = doc_ref.get()
     
     if not doc.exists:
-        return jsonify({"fulfillmentText": "系統目前找不到開獎資料，請先執行爬蟲。"})
+        return jsonify({"fulfillmentText": "系統目前找不到開獎資料，請先確認爬蟲有成功執行。"})
         
     data = doc.to_dict()
-    special = data.get('special_prize', '')
-    grand = data.get('grand_prize', '')
-    first_list = data.get('first_prizes', [])
+    special = str(data.get('special_prize', '')).strip()
+    grand = str(data.get('grand_prize', '')).strip()
+    first_list = [str(num).strip() for num in data.get('first_prizes', [])]
 
-    # --- 判斷邏輯開始 ---
+    # --- 核心對獎邏輯 (支援 8 碼與 3 碼) ---
     
-    # 情況一：使用者輸入完整的 8 位數號碼
+    # 情況 A：使用者輸入完整 8 碼
     if len(user_num) == 8:
         if user_num == special:
-            reply = f"🎉 哇！恭喜中了 【特別獎】 1,000 萬元！天啊快去領獎！"
+            reply = f"🎉 哇！！！恭喜你中了 【特別獎】 1,000 萬元！快去買透天厝了！"
         elif user_num == grand:
-            reply = f"🎉 恭喜中了 【特獎】 200 萬元！太幸運了！"
+            reply = f"🎉 恭喜中了 【特獎】 200 萬元！太幸運了吧！"
         else:
-            # 比對頭獎到六獎
-            max_prize_name = ""
-            max_prize_money = 0
+            # 頭獎到六獎比對
+            win_prize = ""
+            win_money = 0
             
             for first_num in first_list:
+                if len(first_num) != 8:
+                    continue
                 if user_num == first_num:
-                    max_prize_name, max_prize_money = "頭獎", 200000
+                    win_prize, win_money = "頭獎", 200000
                     break
                 elif user_num[-7:] == first_num[-7:]:
-                    max_prize_name, max_prize_money = "二獎", 40000
+                    win_prize, win_money = "二獎", 40000
                 elif user_num[-6:] == first_num[-6:]:
-                    max_prize_name, max_prize_money = "三獎", 10000
+                    win_prize, win_money = "三獎", 10000
                 elif user_num[-5:] == first_num[-5:]:
-                    max_prize_name, max_prize_money = "四獎", 4000
+                    win_prize, win_money = "四獎", 4000
                 elif user_num[-4:] == first_num[-4:]:
-                    max_prize_name, max_prize_money = "五獎", 1000
+                    win_prize, win_money = "五獎", 1000
                 elif user_num[-3:] == first_num[-3:]:
-                    if max_prize_money < 200: # 確保不蓋掉更高的獎
-                        max_prize_name, max_prize_money = "六獎", 200
+                    if win_money < 200: # 避免蓋掉更高的頭/二/三/四/五獎
+                        win_prize, win_money = "六獎", 200
 
-            if max_prize_money > 0:
-                reply = f"🎉 恭喜！號碼 【{user_num}】 對中 【{max_prize_name}】！可獲得金額：{max_prize_money:,} 元！"
+            if win_money > 0:
+                reply = f"🎉 恭喜！號碼 【{user_num}】 對中 【{win_prize}】！可獲得金額：{win_money:,} 元！"
             else:
-                reply = f"❌ 殘念！完整號碼 【{user_num}】 沒有中獎，再接再厲！"
+                reply = f"❌ 殘念！完整號碼 【{user_num}】 沒有中獎，下一張會更好！"
 
-    # 情況二：使用者只輸入末 3 碼
-    else:
-        three_digit = user_num[-3:].zfill(3)
-        # 收集所有中獎號碼的末三碼
-        possible_3_digits = [special[-3:], grand[-3:]] + [f[-3:] for f in first_list]
+    # 情況 B：使用者只輸入末 3 碼（標準快捷對獎）
+    elif len(user_num) == 3:
+        # 收集所有開獎號碼的末三碼
+        possible_3_digits = [special[-3:], grand[-3:]] + [f[-3:] for f in first_list if len(f) == 8]
         
-        if three_digit in possible_3_digits:
-            reply = f"🔍 💡 喔！末3碼 【{three_digit}】 好像有機會喔！請輸入「完整的8位數發票號碼」，我幫你算算看中了什麼獎跟多少錢！"
+        if user_num in possible_3_digits:
+            reply = f"🔍 💡 喔喔喔！末3碼 【{user_num}】 有機會中獎喔！請輸入「完整的 8 位數發票號碼」，我幫你算算看中什麼獎、拿多少錢！"
         else:
-            reply = f"❌ 號碼 【{three_digit}】 沒中，下張再接再厲！加油！"
+            reply = f"❌ 號碼 【{user_num}】 沒中，下張再接再厲！加油！"
+            
+    else:
+        reply = f"請輸入「3位數」或「8位數」的發票號碼才可以幫你對獎喔！"
 
     return jsonify({"fulfillmentText": reply})
 
