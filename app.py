@@ -17,7 +17,7 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# --- 既有的對獎功能邏輯 (不更動) ---
+# --- 核心對獎邏輯 ---
 def get_prize_info(user_num, data):
     special = data.get('special_prize')
     grand = data.get('grand_prize')
@@ -64,23 +64,20 @@ def webhook():
             params = req.get('queryResult', {}).get('parameters', {})
             user_num = params.get('number')
             
-            # 透過正規表達式確保能抓到數字
             if not user_num:
                 query_text = req.get('queryResult', {}).get('queryText', '')
                 digits = re.findall(r'\d+', str(query_text))
                 user_num = digits[-1] if digits else None
             
-            if not user_num:
-                return jsonify({"fulfillmentText": "請輸入有效的發票號碼數字。"})
+            if not user_num: return jsonify({"fulfillmentText": "請輸入發票號碼數字。"})
 
             user_num = str(int(float(user_num)))
-            
             data = db.collection('invoice_numbers').document('latest').get().to_dict()
             result = get_prize_info(user_num, data)
             
             reply = f"🎉 恭喜！號碼 【{user_num}】 對中 【{result}】！" if result else f"❌ 號碼 【{user_num}】 未中獎。"
             
-            # 存入紀錄到 Firebase
+            # 存入紀錄
             db.collection('user_history').add({
                 'number': user_num,
                 'result': result if result else "未中獎",
@@ -89,7 +86,7 @@ def webhook():
             return jsonify({"fulfillmentText": reply})
 
     except Exception as e:
-        return jsonify({"fulfillmentText": f"系統處理時發生錯誤: {str(e)}"})
+        return jsonify({"fulfillmentText": f"系統發生錯誤: {str(e)}"})
 
 if __name__ == '__main__':
-    app.run(port=5000)
+    app.run()
