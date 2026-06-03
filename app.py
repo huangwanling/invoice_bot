@@ -39,9 +39,10 @@ def get_prize_info(user_num, data):
 def webhook():
     try:
         req = request.get_json(silent=True, force=True)
+        print(f"收到請求: {req}")
         action = req.get('queryResult', {}).get('action')
         print(f"收到指令: {action}")
-        
+
         # --- 新功能 1: 查看最新開獎號碼 ---
         if action == 'get_latest_invoice':
             doc = db.collection('invoice_numbers').document('latest').get()
