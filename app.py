@@ -18,13 +18,13 @@ def get_prize_info(user_num, data):
     grand = data.get('grand_prize')
     first_list = data.get('first_prizes', [])
     
-    # 1. 精確比對 (完整 8 碼)
+    # 1. 完整八碼對獎
     if len(user_num) == 8:
         if user_num == special: return "特別獎 (1,000萬元)"
         if user_num == grand: return "特獎 (200萬元)"
         if user_num in first_list: return "頭獎 (20萬元)"
         
-    # 2. 比對二至六獎 (不論輸入幾碼)
+    # 2. 比對二至六獎
     msg_list = []
     for f in first_list:
         if len(user_num) >= 7 and user_num[-7:] == f[-7:]: msg_list.append("二獎 (4萬元)")
@@ -33,19 +33,15 @@ def get_prize_info(user_num, data):
         elif len(user_num) >= 4 and user_num[-4:] == f[-4:]: msg_list.append("五獎 (1,000元)")
         elif len(user_num) >= 3 and user_num[-3:] == f[-3:]: msg_list.append("六獎 (200元)")
 
-    # 3. 智慧提示邏輯 (輸入不足 8 碼)
+    # 3. 智慧提示
     if len(user_num) < 8:
-        result_str = "、".join(list(set(msg_list))) if msg_list else ""
-        
-        # 檢查大獎尾數
-        is_special = (user_num == special[-len(user_num):])
-        is_grand = (user_num == grand[-len(user_num):])
-        
-        if is_special or is_grand or msg_list:
-            hint = f"{result_str} " if result_str else ""
-            return f"{hint}(該號碼亦有可能是頭獎、特別獎或特獎，請輸入完整8碼確認)"
-
-    return "、".join(list(set(msg_list))) if msg_list else "未中獎"
+        if msg_list:
+            base_msg = "、".join(list(set(msg_list)))
+            return f"{base_msg} (該號碼亦有可能是頭獎或更高獎項，請輸入完整8碼確認)"
+        if user_num == special[-len(user_num):]: return f"疑似特別獎 (末{len(user_num)}碼相符，請輸入完整8碼確認)"
+        if user_num == grand[-len(user_num):]: return f"疑似特獎 (末{len(user_num)}碼相符，請輸入完整8碼確認)"
+            
+    return "未中獎" if not msg_list else "、".join(list(set(msg_list)))
 
 @app.route('/webhook', methods=['POST'])
 def webhook():
@@ -54,27 +50,37 @@ def webhook():
         user_id = req.get('originalDetectIntentRequest', {}).get('payload', {}).get('data', {}).get('source', {}).get('userId')
         action = req.get('queryResult', {}).get('action')
         
-        # 功能：查看最新開獎 (顯示格式優化)
+        # 功能：查看最新開獎
         if action == 'get_latest_invoice':
             data = db.collection('invoice_numbers').document('latest').get().to_dict()
-            msg = (f"【最新開獎號碼】\n開獎期別：115年 03-04月\n\n"
+            msg = (f"【最新開獎號碼】\n期別：{data.get('period', '115年 03-04月')}\n\n"
                    f"特別獎: {data['special_prize']} (1,000萬元)\n"
                    f"特獎: {data['grand_prize']} (200萬元)\n"
                    f"頭獎: {', '.join(data['first_prizes'])} (20萬元)\n\n"
-                   f"【獎項說明】\n二獎：對中頭獎後7碼 (4萬元)\n"
-                   f"三獎：對中頭獎後6碼 (1萬元)\n四獎：對中頭獎後5碼 (4,000元)\n"
-                   f"五獎：對中頭獎後4碼 (1,000元)\n六獎：對中頭獎後3碼 (200元)")
+                   f"【獎項說明】\n二獎：對中頭獎後7碼 (4萬元)\n三獎：對中頭獎後6碼 (1萬元)\n"
+                   f"四獎：對中頭獎後5碼 (4,000元)\n五獎：對中頭獎後4碼 (1,000元)\n六獎：對中頭獎後3碼 (200元)")
             return jsonify({"fulfillmentText": msg})
 
-        # 功能：查看個人紀錄 (含時間轉換)
+        # 功能：查看個人當月紀錄 (簡潔清爽版)
         elif action == 'get_history':
             if not user_id: return jsonify({"fulfillmentText": "無法辨識身分。"})
-            docs = db.collection('user_history').where('userId', '==', user_id).order_by('timestamp', direction='DESCENDING').limit(15).stream()
-            msg = "【您的個人對獎紀錄】\n"
-            records = [f"[{ (d.to_dict()['timestamp'].replace(tzinfo=None) + timedelta(hours=8)).strftime('%m/%d %H:%M') }] {d.to_dict()['number']}: {d.to_dict()['result']}" for d in docs]
-            return jsonify({"fulfillmentText": msg + "\n".join(records) if records else "尚無紀錄。"})
+            now = datetime.now()
+            start_date = datetime(now.year, now.month, 1)
+            docs = db.collection('user_history').where('userId', '==', user_id).where('timestamp', '>=', start_date).order_by('timestamp', direction='DESCENDING').limit(20).stream()
+            
+            win_records, lose_records = [], []
+            for d in docs:
+                item = d.to_dict()
+                res = item['result']
+                if "未中獎" not in res and "疑似" not in res: win_records.append(f"{item['number']} -> {res}")
+                else: lose_records.append(item['number'])
+            
+            msg = f"【{now.month}月份 對獎紀錄】\n\n"
+            if win_records: msg += "🎉 中獎：\n" + "\n".join(win_records) + "\n\n"
+            if lose_records: msg += "❌ 未中獎：\n" + ", ".join(lose_records)
+            return jsonify({"fulfillmentText": msg if (win_records or lose_records) else "本月尚無紀錄。"})
 
-        # 功能：對獎邏輯
+        # 功能：對獎
         else:
             query_text = req.get('queryResult', {}).get('queryText', '')
             digits = re.findall(r'\d+', str(query_text))
@@ -83,7 +89,7 @@ def webhook():
             
             data = db.collection('invoice_numbers').document('latest').get().to_dict()
             result = get_prize_info(user_num, data)
-            reply = f"🎉 恭喜！【{user_num}】 中了 【{result}】！" if result != "未中獎" else f"❌ 【{user_num}】 未中獎。"
+            reply = f"🎉 恭喜！【{user_num}】 中了 【{result}】！" if ("未中獎" not in result and "疑似" not in result) else f"❌ 【{user_num}】 {result}。"
             
             if user_id:
                 db.collection('user_history').add({'userId': user_id, 'number': user_num, 'result': result, 'timestamp': firestore.SERVER_TIMESTAMP})
