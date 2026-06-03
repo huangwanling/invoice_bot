@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import firebase_admin
 from firebase_admin import credentials, firestore
 import urllib3
+from datetime import datetime  # 🌟 新增導入日期模組
 
 # 1. 初始化 Firebase (本機執行，使用實體金鑰檔案)
 if not firebase_admin._apps:
@@ -55,7 +56,8 @@ def crawl_invoice():
         
         doc_ref.set({
             'period': '115年03-04月',
-            'three_digits': three_digits  # 自動存入真實號碼陣列
+            'three_digits': three_digits,  # 自動存入真實號碼陣列
+            'last_updated_date': datetime.now().strftime('%Y-%m-%d')  # 🌟 同步寫入今天日期
         })
         
         print(f"\n🎉 成功！已自動將真實號碼寫入 Firebase 節點：{target_period}")
