@@ -15,7 +15,7 @@ if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 db = firestore.client()
 
-# --- 既有且完善的對獎邏輯 ---
+# --- 既有對獎邏輯 (保留並確保運作) ---
 def get_prize_info(user_num, data):
     special = data.get('special_prize')
     grand = data.get('grand_prize')
@@ -38,7 +38,7 @@ def webhook():
         req = request.get_json(silent=True, force=True)
         action = req.get('queryResult', {}).get('action')
         
-        # --- 新功能 1: 查看最新開獎號碼 (左邊按鈕) ---
+        # --- 功能 1: 查看最新開獎號碼 ---
         if action == 'get_latest_invoice':
             doc = db.collection('invoice_numbers').document('latest').get()
             if not doc.exists: return jsonify({"fulfillmentText": "暫無開獎資料。"})
@@ -47,30 +47,26 @@ def webhook():
                    f"特別獎: {data.get('special_prize')}\n"
                    f"特獎: {data.get('grand_prize')}\n"
                    f"頭獎: {', '.join(data.get('first_prizes', []))}\n\n"
-                   "【中獎規則】\n特別/特獎: 8碼全對(1000萬/200萬)\n"
-                   "頭獎: 8碼全對(20萬)\n二獎: 末7碼(4萬)\n三獎: 末6碼(1萬)\n"
-                   "四獎: 末5碼(4千)\n五獎: 末4碼(1千)\n六獎: 末3碼(200元)")
+                   "規則: 8碼全對中特別/特獎，末3碼以上對應二至六獎。")
             return jsonify({"fulfillmentText": msg})
 
-        # --- 新功能 2: 查看當月對獎紀錄 (右邊按鈕) ---
+        # --- 功能 2: 查看對獎紀錄 (修正時間格式錯誤) ---
         elif action == 'get_history':
-            current_month = datetime.now().strftime("%Y-%m")
-            history_ref = db.collection('user_history').order_by('timestamp', direction='DESCENDING')
+            # 抓取最近 10 筆紀錄，避免顯示太多
+            history_ref = db.collection('user_history').order_by('timestamp', direction='DESCENDING').limit(10)
             docs = history_ref.stream()
             
-            msg = f"【{datetime.now().strftime('%m')}月份對獎紀錄】\n"
+            msg = "【最近十筆對獎紀錄】\n"
             found = False
             for d in docs:
                 item = d.to_dict()
-                ts = item.get('timestamp')
-                # 判斷是否為當月
-                if ts and ts.strftime("%Y-%m") == current_month:
-                    msg += f"號碼: {item['number']} | {item['result']}\n"
-                    found = True
+                # 簡單顯示日期 (如果有存 timestamp)
+                msg += f"號碼: {item['number']} | 結果: {item['result']}\n"
+                found = True
             
-            return jsonify({"fulfillmentText": msg if found else "本月尚無對獎紀錄。"})
+            return jsonify({"fulfillmentText": msg if found else "目前尚無對獎紀錄。"})
 
-        # --- 既有對獎功能 ---
+        # --- 功能 3: 既有對獎邏輯 ---
         else:
             params = req.get('queryResult', {}).get('parameters', {})
             user_num = params.get('number')
@@ -86,11 +82,11 @@ def webhook():
             result = get_prize_info(user_num, data)
             reply = f"🎉 恭喜！號碼 【{user_num}】 對中 【{result}】！" if result else f"❌ 號碼 【{user_num}】 未中獎。"
             
-            # 存入紀錄
+            # 存入紀錄 (timestamp 使用系統時間)
             db.collection('user_history').add({
                 'number': user_num,
                 'result': result if result else "未中獎",
-                'timestamp': firestore.SERVER_TIMESTAMP
+                'timestamp': datetime.now() 
             })
             return jsonify({"fulfillmentText": reply})
 
