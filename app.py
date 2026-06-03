@@ -38,12 +38,13 @@ def webhook():
     req = request.get_json(silent=True, force=True)
     
     try:
-        # 3. 萃取出使用者輸入的發票號碼參數
-        user_input = req.get('queryResult').get('parameters').get('invoice_num')
+        # 3. 萃取出使用者輸入的發票號碼參數 (已精準對齊 Dialogflow 的參數名稱 number)
+        user_input = req.get('queryResult').get('parameters').get('number')
         
-        # 防呆機制：自動補足成三位數
+        # 強大防呆：確保轉成字串，並自動補足成三位數 (如輸入 52 變成 052)
         user_num = str(int(user_input)).zfill(3)
     except Exception as e:
+        print(f"解析號碼失敗: {e}")
         return jsonify({"fulfillmentText": "哎呀，我沒聽懂號碼，請輸入發票的最後 3 碼數字（例如：520）"})
 
     # 4. 去 Firebase 撈取最新一期的中獎資料
