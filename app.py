@@ -6,7 +6,6 @@ from datetime import datetime, timedelta
 
 app = Flask(__name__)
 
-# Firebase 初始化
 if not firebase_admin._apps:
     firebase_config = os.environ.get('FIREBASE_KEY_JSON')
     cred = credentials.Certificate(json.loads(firebase_config)) if firebase_config else credentials.Certificate("firebase_key.json")
@@ -18,13 +17,11 @@ def get_prize_info(user_num, data):
     grand = data.get('grand_prize')
     first_list = data.get('first_prizes', [])
     
-    # 1. 完整八碼對獎
     if len(user_num) == 8:
         if user_num == special: return "特別獎 (1,000萬元)"
         if user_num == grand: return "特獎 (200萬元)"
         if user_num in first_list: return "頭獎 (20萬元)"
         
-    # 2. 比對二至六獎
     msg_list = []
     for f in first_list:
         if len(user_num) >= 7 and user_num[-7:] == f[-7:]: msg_list.append("二獎 (4萬元)")
@@ -33,7 +30,6 @@ def get_prize_info(user_num, data):
         elif len(user_num) >= 4 and user_num[-4:] == f[-4:]: msg_list.append("五獎 (1,000元)")
         elif len(user_num) >= 3 and user_num[-3:] == f[-3:]: msg_list.append("六獎 (200元)")
 
-    # 3. 智慧提示
     if len(user_num) < 8:
         if msg_list:
             base_msg = "、".join(list(set(msg_list)))
@@ -50,7 +46,6 @@ def webhook():
         user_id = req.get('originalDetectIntentRequest', {}).get('payload', {}).get('data', {}).get('source', {}).get('userId')
         action = req.get('queryResult', {}).get('action')
         
-        # 功能：查看最新開獎
         if action == 'get_latest_invoice':
             data = db.collection('invoice_numbers').document('latest').get().to_dict()
             msg = (f"【最新開獎號碼】\n期別：{data.get('period', '115年 03-04月')}\n\n"
@@ -61,7 +56,6 @@ def webhook():
                    f"四獎：對中頭獎後5碼 (4,000元)\n五獎：對中頭獎後4碼 (1,000元)\n六獎：對中頭獎後3碼 (200元)")
             return jsonify({"fulfillmentText": msg})
 
-        # 功能：查看個人當月紀錄 (簡潔清爽版)
         elif action == 'get_history':
             if not user_id: return jsonify({"fulfillmentText": "無法辨識身分。"})
             now = datetime.now()
@@ -80,7 +74,6 @@ def webhook():
             if lose_records: msg += "❌ 未中獎：\n" + ", ".join(lose_records)
             return jsonify({"fulfillmentText": msg if (win_records or lose_records) else "本月尚無紀錄。"})
 
-        # 功能：對獎
         else:
             query_text = req.get('queryResult', {}).get('queryText', '')
             digits = re.findall(r'\d+', str(query_text))

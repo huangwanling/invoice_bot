@@ -31,11 +31,10 @@ def crawl_invoice():
 
         target_numbers = numbers[-5:] 
         
-        # 這裡的欄位名稱必須與 app.py 一致
         data = {
             'special_prize': target_numbers[0],
             'grand_prize': target_numbers[1],
-            'first_prizes': target_numbers[2:] # 修正為 first_prizes
+            'first_prizes': target_numbers[2:] 
         }
         
         db.collection('invoice_numbers').document('latest').set(data)
